@@ -1,8 +1,15 @@
 
-// 1. Crear el mapa
+// =====================================================
+// 1. CREAR EL MAPA
+// =====================================================
+
 const map = L.map('map').setView([4.5709, -74.2973], 6);
 
-// 2. Capas base
+
+// =====================================================
+// 2. CAPAS BASE
+// =====================================================
+
 const baseMaps = {
     "OpenStreetMap": L.tileLayer(
         'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -21,30 +28,38 @@ const baseMaps = {
 
 baseMaps["OpenStreetMap"].addTo(map);
 
-// 3. Servicio WMS del DANE
+
+// =====================================================
+// 3. SERVICIO WMS DEL DANE
+// =====================================================
+
 const geoserverUrl =
     'https://geoportal.dane.gov.co/mparcgis/services/MGN2024/Serv_CapasMGN_2024/MapServer/WMSServer';
 
-// Departamentos WMS
 const departamentosWMS = L.tileLayer.wms(geoserverUrl, {
     layers: '8',
     format: 'image/png',
     transparent: true,
     attribution: 'DANE'
-}).addTo(map);
+});
 
-// Municipios WMS
 const municipiosWMS = L.tileLayer.wms(geoserverUrl, {
     layers: '7',
     format: 'image/png',
     transparent: true,
     attribution: 'DANE'
-}).addTo(map);
+});
 
-// 4. Control de capas
+departamentosWMS.addTo(map);
+
+
+// =====================================================
+// 4. CONTROL DE CAPAS
+// =====================================================
+
 const overlayMaps = {
-    "Departamentos (WMS)": departamentosWMS,
-    "Municipios (WMS)": municipiosWMS
+    "Departamentos (WMS - DANE)": departamentosWMS,
+    "Municipios (WMS - DANE)": municipiosWMS
 };
 
 const controlLayer = L.control.layers(
@@ -53,17 +68,30 @@ const controlLayer = L.control.layers(
     { collapsed: false }
 ).addTo(map);
 
-// 5. Cargar departamentos desde GeoJSON local
-fetch('datos/departamentos.geojson')
+    // 5. CARGAR DEPARTAMENTOS DESDE GEOSERVER WFS
+
+const wfsUrl =
+    'http://localhost:8080/geoserver/ne/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=ne:departamentos&outputFormat=application/json';
+
+fetch(wfsUrl)
+
     .then(response => {
         if (!response.ok) {
-            throw new Error('No se pudo cargar el GeoJSON');
+            throw new Error(
+                'Error HTTP al consultar WFS: ' + response.status
+            );
         }
         return response.json();
     })
     .then(data => {
 
-        const departamentosGeoJSON = L.geoJSON(data, {
+        console.log('Respuesta recibida desde GeoServer:', data);
+
+        if (!data.features || data.features.length === 0) {
+            throw new Error('El servicio WFS no contiene departamentos.');
+        }
+
+        const departamentosWFS = L.geoJSON(data, {
 
             // Estilo de los departamentos
             style: {
@@ -73,18 +101,26 @@ fetch('datos/departamentos.geojson')
                 fillOpacity: 0.5
             },
 
-            // Información y resaltado
+            // Información y eventos
             onEachFeature: function(feature, layer) {
 
                 const p = feature.properties || {};
-                const nombre = p.dpto_cnmbr || 'Departamento';
-                const codigo = p.dpto_ccdgo || '';
+
+                const nombre =
+                    p.dpto_cnmbr ||
+                    p.nombre ||
+                    'Departamento';
+
+                const codigo =
+                    p.dpto_ccdgo ||
+                    p.codigo ||
+                    '';
 
                 // Ventana emergente
-                layer.bindPopup(
-                    `<h3>${nombre}</h3>
-                     <p><b>Código:</b> ${codigo}</p>`
-                );
+                layer.bindPopup(`
+                    <h3>${nombre}</h3>
+                    <p><b>Código:</b> ${codigo}</p>
+                `);
 
                 // Resaltar al pasar el cursor
                 layer.on('mouseover', function() {
@@ -97,36 +133,51 @@ fetch('datos/departamentos.geojson')
 
                 // Restaurar estilo original
                 layer.on('mouseout', function() {
-                    departamentosGeoJSON.resetStyle(layer);
+                    departamentosWFS.resetStyle(layer);
                 });
             }
         });
 
-        departamentosGeoJSON.addTo(map);
+        // Agregar departamentos al mapa
+        departamentosWFS.addTo(map);
 
-        // Incorporar GeoJSON al control de capas
+        // Agregar al control de capas
         controlLayer.addOverlay(
-            departamentosGeoJSON,
-            "Departamentos (GeoJSON)"
+            departamentosWFS,
+            "Departamentos (WFS - GeoServer)"
         );
 
-        // Ajustar el mapa a Colombia
-        map.fitBounds(departamentosGeoJSON.getBounds());
+        // Ajustar vista a Colombia
+        map.fitBounds(departamentosWFS.getBounds());
 
-        console.log('Departamentos GeoJSON cargados correctamente');
+        console.log(
+            'Departamentos WFS cargados correctamente:',
+            data.features.length
+        );
     })
     .catch(error => {
-        console.error('Error cargando departamentos:', error);
+        console.error(
+            'Error cargando departamentos desde WFS:',
+            error
+        );
     });
 
-// 6. Control de escala
+
+// =====================================================
+// 6. CONTROL DE ESCALA
+// =====================================================
+
 L.control.scale({
     position: 'bottomleft',
     metric: true,
     imperial: false
 }).addTo(map);
 
-// 7. Panel de información
+
+// =====================================================
+// 7. PANEL DE INFORMACIÓN
+// =====================================================
+
 const info = L.control({
     position: 'topleft'
 });
@@ -138,7 +189,7 @@ info.onAdd = function() {
     div.innerHTML = `
         <h4>Colombia - Servicios Geográficos</h4>
         <p>Visualización de departamentos y municipios</p>
-        <p><small>Datos: DANE</small></p>
+        <p><small>Datos: DANE y GeoServer</small></p>
     `;
 
     return div;
@@ -146,14 +197,22 @@ info.onAdd = function() {
 
 info.addTo(map);
 
-// 8. Marcador de Bogotá
+
+// =====================================================
+// 8. MARCADOR DE BOGOTÁ
+// =====================================================
+
 L.marker([4.7110, -74.0721])
     .addTo(map)
     .bindPopup(
         '<b>Bogotá D.C.</b><br>Capital de Colombia'
     );
 
-// 9. Leyenda
+
+// =====================================================
+// 9. LEYENDA
+// =====================================================
+
 const leyenda = L.control({
     position: 'bottomright'
 });
@@ -164,21 +223,28 @@ leyenda.onAdd = function() {
 
     div.innerHTML = `
         <h4>Leyenda</h4>
+
         <p>
-            <span style="background:#e8f881;
-            border:1px solid #232323;
-            display:inline-block;
-            width:15px;
-            height:15px;"></span>
-            Departamentos (GeoJSON)
+            <span style="
+                background:#e8f881;
+                border:1px solid #232323;
+                display:inline-block;
+                width:15px;
+                height:15px;">
+            </span>
+            Departamentos (WFS)
         </p>
+
         <p>
-            <span style="background:#ff6600;
-            display:inline-block;
-            width:15px;
-            height:15px;"></span>
+            <span style="
+                background:#ff6600;
+                display:inline-block;
+                width:15px;
+                height:15px;">
+            </span>
             Resaltado
         </p>
+
         <p>Capas de referencia: DANE</p>
     `;
 
